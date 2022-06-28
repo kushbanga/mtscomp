@@ -599,26 +599,35 @@ class Reader:
                     self.chunk_offsets[first_chunk + 1:last_chunk + 2])):
             yield first_chunk + idx, i0, i1 - i0
 
-    def read_chunk(self, chunk_idx, chunk_start, chunk_length):
+    def read_chunk(self, chunk_idx, chunk_start, chunk_length, max_attempts=3):
         """Read a compressed chunk and return a NumPy array."""
         logger.debug(f"Reading compressed chunk {chunk_idx}, {chunk_start}, {chunk_length}")
-        # Load the compressed chunk from the file.
-        if hasattr(os, 'pread'):
-            # On UNIX, we use an atomic system call to read N bytes of data from the file so that
-            # this call is thread-safe.
-            cbuffer = os.pread(self.cdata.fileno(), chunk_length, chunk_start)
-        else:  # pragma: no cover
-            # Otherwise, we have to use two system calls, a seek and a read, and we need to
-            # put a lock so that we're sure that this pair of calls is atomic across threads.
-            with lock:
-                self.cdata.seek(chunk_start)
-                cbuffer = self.cdata.read(chunk_length)
-        assert len(cbuffer) == chunk_length
-        # Decompress the chunk.
-        try:
-            buffer = zlib.decompress(cbuffer)
-        except Exception:  # pragma: no cover
-            raise IOError("Compressed chunk #%d is corrupted." % chunk_idx)
+
+        # Try to load and decompress the data multiple times before raising an error
+        n_attempts = 0
+        while True:
+            # Load the compressed chunk from the file.
+            if hasattr(os, 'pread'):
+                # On UNIX, we use an atomic system call to read N bytes of data from the file so that
+                # this call is thread-safe.
+                cbuffer = os.pread(self.cdata.fileno(), chunk_length, chunk_start)
+            else:  # pragma: no cover
+                # Otherwise, we have to use two system calls, a seek and a read, and we need to
+                # put a lock so that we're sure that this pair of calls is atomic across threads.
+                with lock:
+                    self.cdata.seek(chunk_start)
+                    cbuffer = self.cdata.read(chunk_length)
+            assert len(cbuffer) == chunk_length
+            # Decompress the chunk.
+            try:
+                buffer = zlib.decompress(cbuffer)
+                break
+            except Exception:  # pragma: no cover
+                # Count number of failed attempts and raise an error after a set threshold
+                n_attempts += 1
+                if n_attempts == max_attempts:
+                    raise IOError(f"Compressed chunk {chunk_idx} is corrupted, "
+                                  f"unable to decompress after {n_attempts} attempts")
         chunk = np.frombuffer(buffer, self.dtype)
         assert chunk.dtype == self.dtype
         # Find the chunk shape.

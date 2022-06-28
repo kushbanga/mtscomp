@@ -564,6 +564,7 @@ class Reader:
         self.n_chunks = len(self.chunk_bounds) - 1
         self.shape = (self.n_samples, self.n_channels)
         self.ndim = 2
+        self.data_path = None
 
         # Batches.
         self.batch_size = self.config.n_threads  # in each batch, there is 1 chunk per thread.
@@ -574,6 +575,7 @@ class Reader:
             if Path(cdata).suffix in ('.bin', '.dat'):  # pragma: no cover
                 # This can arise if trying to decompress an already-decompressed file.
                 logger.error("File to decompress has unexpected extension %s.", Path(cdata).suffix)
+            self.data_path = cdata
             cdata = open(cdata, 'rb')
         self.cdata = cdata
 
@@ -628,6 +630,10 @@ class Reader:
                 if n_attempts == max_attempts:
                     raise IOError(f"Compressed chunk {chunk_idx} is corrupted, "
                                   f"unable to decompress after {n_attempts} attempts")
+                # Close old file handle and replace with a new one
+                self.cdata.close()
+                self.cdata = open(self.data_path, 'rb')
+
         chunk = np.frombuffer(buffer, self.dtype)
         assert chunk.dtype == self.dtype
         # Find the chunk shape.
